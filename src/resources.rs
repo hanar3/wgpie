@@ -1,5 +1,4 @@
 use std::io::{BufReader, Cursor};
-
 use cfg_if::cfg_if;
 use wgpu::util::DeviceExt;
 
@@ -93,7 +92,6 @@ pub async fn load_model(
 
     let mut materials = Vec::new();
     for m in obj_materials? {
-        println!("{m:?}");
         let diffuse_texture = load_texture(&m.diffuse_texture, device, queue).await?;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
