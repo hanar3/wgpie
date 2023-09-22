@@ -1,0 +1,38 @@
+[package]
+name = "r-editor"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "window"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cfg-if = "1"
+env_logger = "0.10.0"
+log = "0.4.20"
+pollster = "0.3.0"
+wasm-bindgen-futures = "0.4.30"
+wgpu = "0.17.0"
+winit = "0.28.6"
+bytemuck = { version = "1.12", features = [ "derive" ] }
+anyhow = "1.0.75"
+cgmath = "0.18.0"
+
+[dependencies.image]
+vesion = "0.24"
+default-features = false
+features = ["png", "jpeg"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+console_log = "1.0"
+wgpu = { version = "0.17", features = ["webgl"]}
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4.30"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "Element",
+]}
