@@ -1,8 +1,10 @@
+mod model;
+mod resources;
 mod texture;
-mod vertex;
 
 use bytemuck;
 use cgmath;
+use model::{DrawModel, Model, Vertex};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -48,79 +50,6 @@ impl InstanceRaw {
         }
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    position: [f32; 3],
-    tex_coords: [f32; 2],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
-pub fn rect(width: f32, height: f32, x: f32, y: f32) -> (Vec<Vertex>, Vec<u16>) {
-    let vertices = vec![
-        Vertex {
-            position: [0.5, 0.5, 0.0],
-            tex_coords: [1.0, 0.0],
-        }, // Top right
-        Vertex {
-            position: [-0.5, 0.5, 0.0],
-            tex_coords: [0.0, 0.0],
-        }, // Top left
-        Vertex {
-            position: [0.5, -0.5, 0.0],
-            tex_coords: [1.0, 1.0],
-        }, // Bottom right
-        Vertex {
-            position: [-0.5, -0.5, 0.0],
-            tex_coords: [0.0, 1.0],
-        }, // Bottom left
-    ];
-
-    let indices = vec![
-        0, 1, 2, // First triangle
-        2, 1, 3, //
-    ];
-    (vertices, indices)
-}
-
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [-0.0868241, 0.49240386, 0.0],
-        tex_coords: [0.4131759, 1.0 - 0.99240386],
-    }, // A
-    Vertex {
-        position: [-0.49513406, 0.06958647, 0.0],
-        tex_coords: [0.0048659444, 1.0 - 0.56958647],
-    }, // B
-    Vertex {
-        position: [-0.21918549, -0.44939706, 0.0],
-        tex_coords: [0.28081453, 1.0 - 0.05060294],
-    }, // C
-    Vertex {
-        position: [0.35966998, -0.3473291, 0.0],
-        tex_coords: [0.85967, 1.0 - 0.1526709],
-    }, // D
-    Vertex {
-        position: [0.44147372, 0.2347359, 0.0],
-        tex_coords: [0.9414737, 1.0 - 0.7347359],
-    }, // E
-];
-
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
@@ -251,6 +180,7 @@ impl CameraUniform {
 }
 
 struct State {
+    obj_model: Model,
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -258,12 +188,7 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
     clear_color: wgpu::Color,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
     render_pipeline: wgpu::RenderPipeline,
-    diffuse_bind_group: wgpu::BindGroup,
-    diffuse_texture: texture::Texture,
     depth_texture: texture::Texture,
     camera: Camera,
     camera_buffer: wgpu::Buffer,
@@ -310,9 +235,6 @@ impl State {
 
         let surface_caps = surface.get_capabilities(&adapter);
 
-        // Shader code in this tutorial assumes an sRGB surface texture. Using a different
-        // one will result all the colors coming out darker. If you want to support non
-        // sRGB surfaces, you'll need to account for that when drawing to the frame.
         let surface_format = surface_caps
             .formats
             .iter()
@@ -334,9 +256,7 @@ impl State {
 
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
-        let diffuse_bytes = include_bytes!("yoi.jpg");
-        let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree").unwrap();
+
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -360,21 +280,6 @@ impl State {
                 ],
                 label: Some("texture_bind_group_layout"),
             });
-
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-            ],
-            label: Some("diffuse_bind_group"),
-        });
 
         let camera = Camera {
             eye: (0.0, 2.0, 2.0).into(),
@@ -442,8 +347,8 @@ impl State {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",                          // 1.
-                buffers: &[Vertex::desc(), InstanceRaw::desc()], // 2.
+                entry_point: "vs_main", // 1.
+                buffers: &[model::ModelVertex::desc(), InstanceRaw::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -483,30 +388,14 @@ impl State {
             multiview: None, // 5.
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let num_indices = INDICES.len() as u32;
+        let obj_model =
+            resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+                .await
+                .unwrap();
 
         let instances: Vec<Instance> = vec![
             Instance {
                 position: cgmath::Vector3::new(-1.0, 0.0, 0.0),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::unit_z(),
-                    cgmath::Deg(0.0),
-                ),
-            },
-            Instance {
-                position: cgmath::Vector3::new(0.0, 0.0, 0.0),
                 rotation: cgmath::Quaternion::from_axis_angle(
                     cgmath::Vector3::unit_z(),
                     cgmath::Deg(0.0),
@@ -520,35 +409,14 @@ impl State {
                 ),
             },
             Instance {
-                position: cgmath::Vector3::new(2.0, 0.0, 0.0),
+                position: cgmath::Vector3::new(3.0, 0.0, 0.0),
                 rotation: cgmath::Quaternion::from_axis_angle(
                     cgmath::Vector3::unit_z(),
                     cgmath::Deg(0.0),
                 ),
             },
             Instance {
-                position: cgmath::Vector3::new(-1.0, 0.0, -1.0),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::unit_z(),
-                    cgmath::Deg(0.0),
-                ),
-            },
-            Instance {
-                position: cgmath::Vector3::new(0.0, 0.0, -1.0),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::unit_z(),
-                    cgmath::Deg(0.0),
-                ),
-            },
-            Instance {
-                position: cgmath::Vector3::new(1.0, 0.0, -1.0),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::unit_z(),
-                    cgmath::Deg(0.0),
-                ),
-            },
-            Instance {
-                position: cgmath::Vector3::new(2.0, 0.0, -1.0),
+                position: cgmath::Vector3::new(5.0, 0.0, 0.0),
                 rotation: cgmath::Quaternion::from_axis_angle(
                     cgmath::Vector3::unit_z(),
                     cgmath::Deg(0.0),
@@ -572,11 +440,6 @@ impl State {
             size,
             clear_color,
             render_pipeline,
-            vertex_buffer,
-            num_indices,
-            index_buffer,
-            diffuse_bind_group,
-            diffuse_texture,
             camera,
             camera_buffer,
             camera_bind_group,
@@ -585,6 +448,7 @@ impl State {
             instances,
             instance_buffer,
             depth_texture,
+            obj_model,
         }
     }
 
@@ -598,7 +462,8 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.depth_texture =
+                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
 
@@ -668,18 +533,16 @@ impl State {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: true,
                     }),
-                    stencil_ops: None
+                    stencil_ops: None,
                 }),
             });
 
+
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+            render_pass.draw_model_instanced(&self.obj_model,  0..self.instances.len() as u32, &self.camera_bind_group);
         }
+
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
