@@ -1,5 +1,5 @@
-use std::io::{BufReader, Cursor};
 use cfg_if::cfg_if;
+use std::io::{BufReader, Cursor};
 use wgpu::util::DeviceExt;
 
 use crate::{model, texture};
@@ -92,7 +92,11 @@ pub async fn load_model(
 
     let mut materials = Vec::new();
     for m in obj_materials? {
-        let diffuse_texture = load_texture(&m.diffuse_texture, device, queue).await?;
+        let diffuse_texture = if String::is_empty(&m.diffuse_texture) {
+            load_texture("MissingTexture.png", device, queue).await?
+        } else {
+            load_texture(&m.diffuse_texture, device, queue).await?
+        };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
             entries: &[
@@ -118,7 +122,6 @@ pub async fn load_model(
     let meshes = models
         .into_iter()
         .map(|m| {
-
             let vertices = (0..m.mesh.positions.len() / 3)
                 .map(|i| model::ModelVertex {
                     position: [
@@ -138,6 +141,7 @@ pub async fn load_model(
                 })
                 .collect::<Vec<_>>();
 
+            println!("{vertices:?}");
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
                 contents: bytemuck::cast_slice(&vertices),
