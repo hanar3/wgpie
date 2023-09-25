@@ -141,7 +141,6 @@ pub async fn load_model(
                 })
                 .collect::<Vec<_>>();
 
-            println!("{vertices:?}");
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
                 contents: bytemuck::cast_slice(&vertices),
