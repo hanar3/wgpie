@@ -4,7 +4,6 @@ mod model_renderer;
 mod resources;
 mod texture;
 
-use bytemuck;
 use cgmath;
 use model::{DrawModel, Model, Vertex};
 use wgpu::util::DeviceExt;
@@ -134,8 +133,8 @@ impl State {
             });
 
 
-        self.model_scene.render(&mut encoder, &view);
-        // self.ui_scene.render(&mut encoder, &view);
+        // self.model_scene.render(&mut encoder, &view);
+        self.ui_scene.render(&mut encoder, &view);
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
