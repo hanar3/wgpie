@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use cgmath::{Rotation3, SquareMatrix};
 use wgpu::util::DeviceExt;
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
@@ -171,6 +169,12 @@ impl CameraUniform {
     fn update_view_proj(&mut self, camera: &Camera) {
         self.view_proj = camera.build_view_projection_matrix().into();
     }
+
+    fn from_camera(camera: &Camera) -> Self {
+        Self {
+            view_proj: camera.build_view_projection_matrix().into()
+        }
+    }
 }
 
 pub struct ModelScene {
@@ -229,8 +233,7 @@ impl ModelScene {
             zfar: 100.0,
         };
 
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        let mut camera_uniform = CameraUniform::from_camera(&camera);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera buffer"),
