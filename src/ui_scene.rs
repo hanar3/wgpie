@@ -27,88 +27,25 @@ impl Vertex {
     }
 }
 
-fn screen_to_cartesian(
-    screen_x: f32,
-    screen_y: f32,
-    x_min: f32,
-    x_max: f32,
-    y_min: f32,
-    y_max: f32,
-    screen_width: f32,
-    screen_height: f32,
-) -> (f32, f32) {
-    let cartesian_x = (screen_x / screen_width) * (x_max - x_min) + x_min;
-    let cartesian_y = ((screen_height - screen_y) / screen_height) * (y_max - y_min) + y_min;
-
-    (cartesian_x, cartesian_y)
+pub trait Element {
+    fn render(&mut self, render_pass: &mut wgpu::RenderPass);
 }
 
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
-);
-
-pub struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fovy: f32,
-    znear: f32,
-    zfar: f32,
+pub struct Rect {
+    pub pos: cgmath::Vector2<f32>,
+    pub size: cgmath::Vector2<f32>,
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
 }
 
-impl Camera {
-    fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-        let proj = cgmath::ortho(0.0, 0.0, 0.0, 0.0, 0.1, 100.0);
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CameraUniform {
-    view_proj: [[f32; 4]; 4],
-}
-
-impl CameraUniform {
-    fn new() -> Self {
-        Self {
-            view_proj: cgmath::Matrix4::identity().into(),
-        }
-    }
-
-    fn update_view_proj(&mut self, camera: &Camera) {
-        self.view_proj = camera.build_view_projection_matrix().into();
-    }
-
-    fn from_camera(camera: &Camera) -> Self {
-        Self {
-            view_proj: camera.build_view_projection_matrix().into(),
-        }
-    }
-}
-
-pub struct UIScene {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u16>,
-    pub render_pipeline: wgpu::RenderPipeline,
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
-}
-
-impl UIScene {
-    pub async fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
-        let m_box = Box2D::new(point(0.0, 0.0), point(-50.0, -50.0));
-
-        let aspect = (config.width / config.height) as f32;
-        let half_height = config.height as f32 / 2.0; // also called ortho size
-        let half_width = half_height * aspect;
-
+impl Rect {
+    pub fn new(ctx: &wgpu::Device, pos: cgmath::Vector2<f32>, size: cgmath::Vector2<f32>) -> Self {
+        let end_pos = pos + size;
+        let m_box = Box2D::new(point(pos.x, pos.y), point(end_pos.x, end_pos.y));
         let mut geometry: VertexBuffers<Vertex, u16> = VertexBuffers::new();
         let mut tessellator = FillTessellator::new();
-
         {
             // Compute the tessellation.
             tessellator
@@ -116,14 +53,67 @@ impl UIScene {
                     &m_box,
                     &FillOptions::default(),
                     &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| Vertex {
-                        position: [vertex.position().x, vertex.position().y, -0.0],
+                        position: [vertex.position().x, vertex.position().y, 0.0],
                         color: [0.5, 0.0, 0.0],
                     }),
                 )
                 .unwrap();
         }
-        let vertices = geometry.vertices.to_vec();
-        let indices = geometry.indices.to_vec();
+        // Vertex buffer
+        let vertex_buffer = ctx.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(geometry.vertices.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Index buffer
+        let index_buffer = ctx.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(geometry.indices.as_slice()),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pos,
+            size,
+            vertices: geometry.vertices.clone(),
+            indices: geometry.indices.clone(),
+            vertex_buffer,
+            index_buffer,
+        }
+    }
+
+
+}
+
+pub struct UIScene {
+    pub elements: Vec<Rect>,
+    pub render_pipeline: wgpu::RenderPipeline,
+    pub bind_group: wgpu::BindGroup,
+}
+
+impl UIScene {
+    pub async fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        let aspect = (config.width / config.height) as f32;
+        let half_height = config.height as f32 / 2.0; // also called ortho size
+        let half_width = half_height * aspect;
+        let elements = vec![
+            Rect::new(
+                device,
+                cgmath::Vector2::new(-200.0, -200.0),
+                cgmath::Vector2::new(200.0, 200.0),
+            ),
+            Rect::new(
+                device,
+                cgmath::Vector2::new(20.0, 20.0),
+                cgmath::Vector2::new(200.0, 200.0),
+            ),
+            Rect::new(
+                device,
+                cgmath::Vector2::new(40.0, 40.0),
+                cgmath::Vector2::new(200.0, 200.0),
+            ),
+        ];
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader"),
@@ -211,9 +201,18 @@ impl UIScene {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let projection = cgmath::ortho(-half_width, half_width,-half_height, half_height, -1.0, 1.0);
-        let rotation = cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0));
-        let transform = cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.0)) * cgmath::Matrix4::from(rotation);
+        let projection = cgmath::ortho(
+            -half_width,
+            half_width,
+            -half_height,
+            half_height,
+            -1.0,
+            1.0,
+        );
+        let rotation =
+            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0));
+        let transform = cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.0))
+            * cgmath::Matrix4::from(rotation);
         let view_matrix = cgmath::Matrix4::invert(&transform).unwrap();
         let view_projection_matrix: [[f32; 4]; 4] = (projection * view_matrix).into();
 
@@ -221,20 +220,6 @@ impl UIScene {
             label: Some("uOrthoProj"),
             contents: bytemuck::cast_slice(&view_projection_matrix),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Vertex buffer
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("UI Vertex Buffer"),
-            contents: bytemuck::cast_slice(geometry.vertices.as_slice()),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Index buffer
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("UI Index buffer"),
-            contents: bytemuck::cast_slice(geometry.indices.as_slice()),
-            usage: wgpu::BufferUsages::INDEX,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -253,12 +238,9 @@ impl UIScene {
         });
 
         Self {
-            vertices,
-            indices,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
             bind_group,
+            elements,
         }
     }
 
@@ -266,56 +248,6 @@ impl UIScene {
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         false
-    }
-
-    fn rect(x: f32, y: f32, w: f32, h: f32) -> (Vec<Vertex>, Vec<u16>) {
-        let screen_start_pos = cgmath::Vector2::new(x, y);
-        let screen_end_pos = screen_start_pos + cgmath::Vector2::new(w, h);
-
-        // Start point
-        let xy1 = cgmath::Vector2::from(screen_to_cartesian(
-            screen_start_pos.x,
-            screen_start_pos.y,
-            -1.0,
-            1.0,
-            -1.0,
-            1.0,
-            800.0,
-            600.0,
-        ));
-
-        // End point (in cartesian)
-        let xy2 = cgmath::Vector2::from(screen_to_cartesian(
-            screen_end_pos.x,
-            screen_end_pos.y,
-            -1.0,
-            1.0,
-            -1.0,
-            1.0,
-            800.0,
-            600.0,
-        ));
-
-        let mut vertices = vec![];
-        vertices.push(Vertex {
-            position: [xy1.x, xy1.y, 0.0],
-            color: [0.5, 0.0, 0.0],
-        }); // -0.5, -0.5
-        vertices.push(Vertex {
-            position: [xy2.x, xy1.y, 0.0],
-            color: [0.5, 0.0, 0.0],
-        }); // 0.5, -0.5
-        vertices.push(Vertex {
-            position: [xy2.x, xy2.y, 0.0],
-            color: [0.5, 0.0, 0.0],
-        }); // 0.5, 0.5
-        vertices.push(Vertex {
-            position: [xy1.x, xy2.y, 0.0],
-            color: [0.5, 0.0, 0.0],
-        }); // -0.5, 0.5
-
-        let indices = vec![2, 1, 0, 2, 0, 3];
-        return (vertices, indices);
     }
 
     pub fn update(&mut self, queue: &wgpu::Queue) {}
@@ -336,8 +268,10 @@ impl UIScene {
 
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+        for element in self.elements.as_slice() {
+            render_pass.set_vertex_buffer(0, element.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(element.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..element.indices.len() as u32, 0, 0..1);
+        }
     }
 }
