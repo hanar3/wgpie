@@ -1,34 +1,29 @@
-mod ui_scene;
 mod model;
-mod model_renderer;
+mod ui_scene;
+
 mod resources;
 mod texture;
 
-use cgmath;
-use model::{DrawModel, Model, Vertex};
-use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
 
-use cgmath::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-struct State {
+struct Stage {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
-    model_scene: model_renderer::ModelScene,
     ui_scene: ui_scene::UIScene,
 }
 
-impl State {
+impl Stage {
     async fn new(window: Window) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -82,7 +77,6 @@ impl State {
         };
 
         surface.configure(&device, &config);
-        let model_scene = model_renderer::ModelScene::new(&device, &config, &queue).await;
         let ui_scene = ui_scene::UIScene::new(&device, &config).await;
 
         Self {
@@ -92,7 +86,6 @@ impl State {
             queue,
             config,
             size,
-            model_scene,
             ui_scene,
         }
     }
@@ -107,17 +100,17 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.model_scene.resize(&self.device, &self.config);
+            self.ui_scene.resize(&self.device, &self.config);
         }
     }
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
-        self.model_scene.input(event);
+        self.ui_scene.input(event);
         false
     }
 
     pub fn update(&mut self) {
-        self.model_scene.update(&self.queue);
+        self.ui_scene.update(&self.queue);
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -129,11 +122,10 @@ impl State {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                label: Some("render_encoder"),
             });
 
 
-        // self.model_scene.render(&mut encoder, &view);
         self.ui_scene.render(&mut encoder, &view);
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -172,7 +164,7 @@ pub async fn run() {
             .expect("Couldn't append canvas to document body.");
     }
 
-    let mut state = State::new(window).await;
+    let mut state = Stage::new(window).await;
 
     event_loop.run(move |event, _, control_flow| match event {
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {

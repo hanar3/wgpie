@@ -1,11 +1,13 @@
 extern crate lyon;
-use cgmath::{Rotation3, SquareMatrix};
+use std::ops::Deref;
+
+use cgmath::{prelude::*, Matrix4};
+use cgmath::{Quaternion, Rotation3, SquareMatrix, Transform};
 use lyon::geom::Box2D;
 use lyon::math::point;
-use lyon::path::Path;
 use lyon::tessellation::*;
 use wgpu::util::DeviceExt;
-use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
+use winit::event::{ElementState, KeyboardInput, MouseScrollDelta, VirtualKeyCode, WindowEvent};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,23 +29,18 @@ impl Vertex {
     }
 }
 
-pub trait Element {
-    fn render(&mut self, render_pass: &mut wgpu::RenderPass);
-}
-
-pub struct Rect {
-    pub pos: cgmath::Vector2<f32>,
-    pub size: cgmath::Vector2<f32>,
+pub struct Player {
     vertices: Vec<Vertex>,
     indices: Vec<u16>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    instances: Vec<InstanceRaw>,
+    instance_buffer: wgpu::Buffer,
 }
 
-impl Rect {
-    pub fn new(ctx: &wgpu::Device, pos: cgmath::Vector2<f32>, size: cgmath::Vector2<f32>) -> Self {
-        let end_pos = pos + size;
-        let m_box = Box2D::new(point(pos.x, pos.y), point(end_pos.x, end_pos.y));
+impl Player {
+    pub fn new(ctx: &wgpu::Device) -> Self {
+        let m_box = Box2D::new(point(0.0, 0.0), point(50.0, 50.0));
         let mut geometry: VertexBuffers<Vertex, u16> = VertexBuffers::new();
         let mut tessellator = FillTessellator::new();
         {
@@ -54,7 +51,7 @@ impl Rect {
                     &FillOptions::default(),
                     &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| Vertex {
                         position: [vertex.position().x, vertex.position().y, 0.0],
-                        color: [0.5, 0.0, 0.0],
+                        color: [0.0, 0.0, 0.5],
                     }),
                 )
                 .unwrap();
@@ -73,47 +70,135 @@ impl Rect {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let instance = Instance {
+            position: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(45.0)),
+        };
+        // Instance index buffer
+        let instance_buffer = ctx.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[instance.to_raw()]),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
         Self {
-            pos,
-            size,
             vertices: geometry.vertices.clone(),
             indices: geometry.indices.clone(),
             vertex_buffer,
+            instances: vec![instance.to_raw()],
             index_buffer,
+            instance_buffer,
+        }
+    }
+}
+
+pub struct OrtographicCamera {
+    projection: cgmath::Matrix4<f32>,
+    translation: cgmath::Vector3<f32>,
+    rotation: Quaternion<f32>,
+    scale: f32,
+}
+
+impl OrtographicCamera {
+    fn new(
+        projection: cgmath::Matrix4<f32>,
+        translation: cgmath::Vector3<f32>,
+        rotation: Quaternion<f32>,
+        scale: f32,
+    ) -> Self {
+        Self {
+            projection,
+            translation,
+            rotation,
+            scale,
         }
     }
 
+    fn get_view_proj(&self) -> Matrix4<f32> {
+        let transform = cgmath::Matrix4::from_translation(self.translation)
+            * cgmath::Matrix4::from(self.rotation)
+            * cgmath::Matrix4::from_scale(self.scale);
+        let view = Matrix4::invert(&transform).unwrap();
+        self.projection * view
+    }
 
+    fn set_projection(&mut self, proj: cgmath::Matrix4<f32>) {
+        self.projection = proj;
+    }
+    fn set_position(&mut self, pos: cgmath::Vector3<f32>) {
+        self.translation = pos;
+    }
+
+    fn set_rotation(&mut self, rot: cgmath::Quaternion<f32>) {
+        self.rotation = rot;
+    }
+
+    fn add_scale(&mut self, scale: f32) {
+        if self.scale + scale <= 0.0 {
+            self.scale = 0.1;
+        } else {
+            self.scale += scale;
+        }
+    }
 }
 
+
+
+pub struct Instance {
+    pub position: cgmath::Vector3<f32>,
+    pub rotation: cgmath::Quaternion<f32>,
+}
+
+impl Instance {
+    fn to_raw(&self) -> InstanceRaw {
+        InstanceRaw {
+            model: (cgmath::Matrix4::from_translation(self.position)
+                * cgmath::Matrix4::from(self.rotation))
+            .into(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceRaw {
+    pub model: [[f32; 4]; 4],
+}
+
+impl InstanceRaw {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+
+
+
 pub struct UIScene {
-    pub elements: Vec<Rect>,
+    pub elements: Vec<Player>,
     pub render_pipeline: wgpu::RenderPipeline,
     pub bind_group: wgpu::BindGroup,
+    pub camera: OrtographicCamera,
+    pub camera_buffer: wgpu::Buffer,
 }
 
 impl UIScene {
     pub async fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
-        let aspect = (config.width / config.height) as f32;
+        let aspect = (config.width as f32 / config.height as f32);
         let half_height = config.height as f32 / 2.0; // also called ortho size
         let half_width = half_height * aspect;
-        let elements = vec![
-            Rect::new(
-                device,
-                cgmath::Vector2::new(-200.0, -200.0),
-                cgmath::Vector2::new(200.0, 200.0),
-            ),
-            Rect::new(
-                device,
-                cgmath::Vector2::new(20.0, 20.0),
-                cgmath::Vector2::new(200.0, 200.0),
-            ),
-            Rect::new(
-                device,
-                cgmath::Vector2::new(40.0, 40.0),
-                cgmath::Vector2::new(200.0, 200.0),
-            ),
-        ];
+
+        let elements = vec![Player::new(device)];
+
+
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader"),
@@ -159,7 +244,7 @@ impl UIScene {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",     // 1.
-                buffers: &[Vertex::desc()], // 2.
+                buffers: &[Vertex::desc(), InstanceRaw::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -201,21 +286,24 @@ impl UIScene {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let projection = cgmath::ortho(
-            -half_width,
-            half_width,
-            -half_height,
-            half_height,
-            -1.0,
-            1.0,
-        );
-        let rotation =
-            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0));
-        let transform = cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.0))
-            * cgmath::Matrix4::from(rotation);
-        let view_matrix = cgmath::Matrix4::invert(&transform).unwrap();
-        let view_projection_matrix: [[f32; 4]; 4] = (projection * view_matrix).into();
+        let camera = OrtographicCamera {
+            projection: cgmath::ortho(
+                -half_width,
+                half_width,
+                -half_height,
+                half_height,
+                -1.0,
+                1.0,
+            ),
+            translation: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::from_axis_angle(
+                cgmath::Vector3::unit_z(),
+                cgmath::Deg(0.0),
+            ),
+            scale: 1.0,
+        };
 
+        let view_projection_matrix: [[f32; 4]; 4] = camera.get_view_proj().into();
         let ortho_proj_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("uOrthoProj"),
             contents: bytemuck::cast_slice(&view_projection_matrix),
@@ -241,16 +329,49 @@ impl UIScene {
             render_pipeline,
             bind_group,
             elements,
+            camera_buffer: ortho_proj_buffer,
+            camera,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {}
+    pub fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
+        let aspect = config.width as f32 / config.height as f32;
+        let half_height = config.height as f32 / 2.0;
+        let half_width = half_height as f32 * aspect;
+        let new_projection = cgmath::ortho(
+            -half_width,
+            half_width,
+            -half_height,
+            half_height,
+            -1.0,
+            1.0,
+        );
+        self.camera.set_projection(new_projection);
+    }
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::MouseWheel {
+                device_id,
+                delta,
+                phase,
+                ..
+            } => match delta {
+                MouseScrollDelta::LineDelta(x, y) => {
+                    self.camera.add_scale(y.to_owned());
+                }
+                _ => {}
+            },
+            _ => (),
+        }
+
         false
     }
 
-    pub fn update(&mut self, queue: &wgpu::Queue) {}
+    pub fn update(&mut self, queue: &wgpu::Queue) {
+        let new_view_proj: [[f32; 4]; 4] = self.camera.get_view_proj().into();
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&new_view_proj));
+    }
 
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -270,6 +391,7 @@ impl UIScene {
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         for element in self.elements.as_slice() {
             render_pass.set_vertex_buffer(0, element.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, element.instance_buffer.slice(..));
             render_pass.set_index_buffer(element.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..element.indices.len() as u32, 0, 0..1);
         }
