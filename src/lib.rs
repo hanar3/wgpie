@@ -77,7 +77,7 @@ impl Stage {
         };
 
         surface.configure(&device, &config);
-        let ui_scene = ui_scene::UIScene::new(&device, &config).await;
+        let ui_scene = ui_scene::UIScene::new(&device, &config, &queue).await;
 
         Self {
             window,
