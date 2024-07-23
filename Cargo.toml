@@ -16,7 +16,7 @@ log = "0.4.20"
 pollster = "0.3.0"
 wasm-bindgen-futures = "0.4.30"
 wgpu = "0.17.0"
-winit = "0.28.6"
+winit = "0.28.7"
 bytemuck = { version = "1.12", features = [ "derive" ] }
 anyhow = "1.0.75"
 cgmath = "0.18.0"
@@ -25,11 +25,9 @@ tobj = { version = "3.2.1", features = [
     "async",
 ]}
 lyon = "1.0.1"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
 
-[dependencies.image]
-vesion = "0.24"
-default-features = false
-features = ["png", "jpeg"]
+
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.6"
