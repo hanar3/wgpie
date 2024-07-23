@@ -1,22 +1,14 @@
-mod ui_scene;
 mod model;
 mod model_renderer;
 mod resources;
 mod texture;
+mod ui_scene;
 
-use bytemuck;
-use cgmath;
-use model::{DrawModel, Model, Vertex};
-use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
-
-use cgmath::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
 
 struct State {
     surface: wgpu::Surface,
@@ -132,7 +124,6 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
 
         self.model_scene.render(&mut encoder, &view);
         // self.ui_scene.render(&mut encoder, &view);
